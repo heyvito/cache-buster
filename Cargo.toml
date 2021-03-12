@@ -1,0 +1,21 @@
+[package]
+name = "cache-buster"
+version = "0.1.0"
+authors = ["Victor Gama <hey@vito.io>"]
+edition = "2018"
+exclude = ["staging/**"]
+description = "cache-buster helps static sites keep assets cached gracefully"
+license-file = "LICENSE"
+documentation = "https://github.com/heyvito/cache-buster"
+homepage = "https://github.com/heyvito/cache-buster"
+repository = "https://github.com/heyvito/cache-buster"
+keywords = ["cache", "buster", "asset", "hashing"]
+categories = ["development-tools"]
+
+[dependencies]
+clap = "2.33.3"
+lol_html = "0.2.0"
+walkdir = "2.3.1"
+sha-1 = "0.9.4"
+tempfile = "3.2.0"
+url = "2.2.1"
