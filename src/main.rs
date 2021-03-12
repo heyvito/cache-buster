@@ -1,7 +1,7 @@
 use clap::{App, Arg};
 use walkdir::WalkDir;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::{fs, io};
 use sha1::{Sha1, Digest};
 use std::io::{Error, Write};
@@ -29,6 +29,14 @@ fn main() {
             .help("Your website's base url")
             .takes_value(true)
             .required(true))
+        .arg(Arg::with_name("ignore_assets_extensions")
+            .short("i")
+            .long("ignore-assets-extensions")
+            .value_name("LIST")
+            .help("List of extensions to not hash")
+            .takes_value(true)
+            .multiple(true)
+            .value_delimiter(","))
         .get_matches();
 
     let assets = normalize_path(matches.value_of("assets").unwrap());
@@ -40,14 +48,15 @@ fn main() {
         }
         Ok(url) => url
     };
+    let exts = matches.values_of_lossy("ignore_assets_extensions").unwrap_or_else(|| vec![]);
 
-    match execute(pwd, assets, &base_url) {
+    match execute(pwd, assets, &base_url, exts) {
         Ok(_) => {}
         Err(e) => panic!(format!("Error: {}", e))
     }
 }
 
-fn hash_file(p: &PathBuf) -> Result<String, Error> {
+fn hash_file(p: &Path) -> Result<String, Error> {
     let mut file = fs::File::open(p)?;
     let mut hasher = Sha1::new();
     io::copy(&mut file, &mut hasher)?;
@@ -103,15 +112,21 @@ fn match_asset(src: &str, base_url: &Url, assets_path: &str, assets: &HashMap<St
     String::from(src)
 }
 
-fn execute(source: PathBuf, assets_path: &str, base_url: &Url) -> Result<(), Box<dyn std::error::Error>> {
+fn execute(source: PathBuf, assets_path: &str, base_url: &Url, ignored_exts: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
     let mut assets_hashes = HashMap::new();
-
     for entry in WalkDir::new(assets_path)
         .into_iter()
         .map(|el| el.unwrap())
-        .filter(|el| el.metadata().unwrap().is_file()) {
-        let path = entry.into_path();
-        let hash = hash_file(&path)?;
+        .filter(|el| el.metadata().unwrap().is_file())
+        .filter(|el| !ignored_exts.contains(&String::from(el.path().extension().unwrap().to_str().unwrap()))) {
+        let path = entry.path();
+        let hash = match hash_file(path) {
+            Ok(hash) => hash,
+            Err(e) => {
+                println!("Error hashing {}: {}", path.to_str().unwrap(), e);
+                std::process::exit(1);
+            }
+        };
         let path_str = path.to_str().unwrap();
         assets_hashes.insert(path_str.to_string(), hash);
     };
@@ -119,7 +134,7 @@ fn execute(source: PathBuf, assets_path: &str, base_url: &Url) -> Result<(), Box
     for entry in WalkDir::new(source) {
         let read_entry = entry?;
         let filename = read_entry.file_name().to_str().unwrap();
-        let path = PathBuf::from(&filename);
+        let path = PathBuf::from(read_entry.path());
         if !filename.ends_with(".htm") && !filename.ends_with(".html") {
             continue;
         }
@@ -150,15 +165,27 @@ fn execute(source: PathBuf, assets_path: &str, base_url: &Url) -> Result<(), Box
                 ..Settings::default()
             }, |c: &[u8]| output.write_all(c).unwrap(),
         )?;
-        rewriter.write(&*fs::read(&path)?)?;
+        rewriter.write(&* match fs::read(&path) {
+            Ok(d) => d,
+            Err(err) => {
+                println!("Error reading {}: {}", path.to_str().unwrap(), err);
+                std::process::exit(1);
+            }
+        })?;
         rewriter.end()?;
 
-        fs::rename(output, &path)?;
+        if let Err(err) = fs::rename(&output, &path) {
+            println!("Error renaming {} => {}: {}", output.path().to_str().unwrap(), path.to_str().unwrap(), err);
+            std::process::exit(1);
+        }
     }
 
     for file in assets_hashes.keys() {
         let new_name = update_asset(file, &assets_hashes);
-        fs::rename(file, new_name)?;
+        if let Err(err) = fs::rename(file, &new_name) {
+            println!("Error renaming {} => {}: {}", file, new_name, err);
+            std::process::exit(1);
+        }
     }
 
     Ok(())
